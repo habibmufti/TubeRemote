@@ -154,6 +154,18 @@ func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
+// reject sends an ERROR message then a clean close frame before tearing down the
+// connection, so the client reliably sees why it was refused (e.g. a stale token
+// after the binary restarted with a new one) instead of a bare drop.
+func reject(conn *websocket.Conn, msg string) {
+	deadline := time.Now().Add(writeWait)
+	conn.SetWriteDeadline(deadline)
+	conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"ERROR","message":%q}`, msg)))
+	conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, msg), deadline)
+	conn.Close()
+}
+
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -170,14 +182,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var hs Handshake
 	if err := json.Unmarshal(raw, &hs); err != nil || hs.Token != s.token {
-		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ERROR","message":"invalid token"}`))
-		conn.Close()
+		reject(conn, "invalid token")
 		return
 	}
 
 	if hs.DeviceType != "extension" && hs.DeviceType != "remote" {
-		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"ERROR","message":"unknown deviceType"}`))
-		conn.Close()
+		reject(conn, "unknown deviceType")
 		return
 	}
 

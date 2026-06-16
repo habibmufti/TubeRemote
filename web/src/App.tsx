@@ -16,7 +16,7 @@ const PlayIcon = () => (
 type Tab = 'remote' | 'search' | 'home'
 
 export default function App() {
-  const [token, setToken] = useState(getToken)
+  const token = getToken()
   const [tab, setTab] = useState<Tab>('remote')
   const [playerState, setPlayerState] = useState<PlayerState>({
     isPlaying: false, currentTime: 0, duration: 0,
@@ -70,27 +70,10 @@ export default function App() {
     setPlayerState(prev => ({ ...prev, quality, availableQualities }))
   }, [])
 
-  // The token baked into the QR URL goes stale when the binary restarts with a
-  // fresh one. On rejection, fetch the current token from the binary and adopt
-  // it: useSocket reconnects with the new token, and the REST calls below (which
-  // also carry it) start authorizing again. Keep the URL in sync so a reload works.
-  const onUnauthorized = useCallback(async () => {
-    try {
-      const res = await fetch('/api/status')
-      const data = await res.json()
-      if (data?.token && data.token !== token) {
-        setToken(data.token)
-        const url = new URL(location.href)
-        url.searchParams.set('token', data.token)
-        history.replaceState(null, '', url)
-      }
-    } catch {}
-  }, [token])
-
   const { status, sendCommand } = useSocket({
     token, onPlayerState,
     onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults,
-    onQualityInfo, onPeerConnected, onPeerDisconnected, onUnauthorized,
+    onQualityInfo, onPeerConnected, onPeerDisconnected,
   })
 
   // On video change: reset comments and auto-load the description (lightweight,
@@ -160,12 +143,16 @@ export default function App() {
     setTimeout(() => setHomeLoadingMore(false), 8000)
   }, [sendCommand])
 
-  if (!token) {
+  if (!token || status === 'unauthorized') {
     return (
       <div className="no-token">
         <div className="no-token-icon"><PlayIcon /></div>
         <h1>TubeRemote</h1>
-        <p>Scan the QR code from the Chrome extension popup to connect.</p>
+        <p>
+          {status === 'unauthorized'
+            ? 'This link has expired — the desktop app restarted with a new code. Rescan the QR from the Chrome extension popup to reconnect.'
+            : 'Scan the QR code from the Chrome extension popup to connect.'}
+        </p>
       </div>
     )
   }

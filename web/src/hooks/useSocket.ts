@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error'
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error' | 'unauthorized'
 
 export interface PlayerState {
   isPlaying: boolean
@@ -46,7 +46,6 @@ interface UseSocketOptions {
   onQualityInfo: (quality: string, availableQualities: string[]) => void
   onPeerConnected: () => void
   onPeerDisconnected: () => void
-  onUnauthorized: () => void
 }
 
 export function useSocket({
@@ -59,15 +58,16 @@ export function useSocket({
   onQualityInfo,
   onPeerConnected,
   onPeerDisconnected,
-  onUnauthorized,
 }: UseSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  const unauthorizedRef = useRef(false)
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
+    unauthorizedRef.current = false
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${protocol}//${location.host}/ws`)
@@ -104,26 +104,29 @@ export function useSocket({
             onPeerDisconnected()
             break
           case 'ERROR':
-            // Server rejected our token — usually stale after the binary
-            // restarted with a fresh one. Ask the app to pick up the current
-            // token; the onclose reconnect below then retries with it.
-            onUnauthorized()
+            // The binary mints a new random token on every start, so an old QR
+            // link no longer authorizes. Reject for good and surface it — don't
+            // reconnect, or we'd flap on a reject loop. User must rescan the QR.
+            unauthorizedRef.current = true
+            setStatus('unauthorized')
+            ws.close()
             break
         }
       } catch {}
     }
 
     ws.onclose = () => {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || unauthorizedRef.current) return
       setStatus('disconnected')
       reconnectTimer.current = setTimeout(connect, 2000)
     }
 
     ws.onerror = () => {
+      if (unauthorizedRef.current) return
       setStatus('error')
       ws.close()
     }
-  }, [token, onPlayerState, onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults, onQualityInfo, onPeerConnected, onPeerDisconnected, onUnauthorized])
+  }, [token, onPlayerState, onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults, onQualityInfo, onPeerConnected, onPeerDisconnected])
 
   useEffect(() => {
     mountedRef.current = true
