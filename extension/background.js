@@ -237,6 +237,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === youtubeTabId) youtubeTabId = null
 })
 
+// MV3 service workers are suspended after ~30s idle, which kills any setTimeout
+// reconnect — so a dropped connection (e.g. the binary restarting) would never
+// recover until something else happened to wake the worker, leaving the phone
+// stuck on "Waiting...". A periodic alarm survives suspension: it wakes the
+// worker and re-checks the connection. connect() is a no-op when already up.
+chrome.alarms.create('keepalive', { periodInMinutes: 0.5 })
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepalive') connect()
+})
+
 chrome.runtime.onStartup.addListener(connect)
 chrome.runtime.onInstalled.addListener(connect)
 connect()

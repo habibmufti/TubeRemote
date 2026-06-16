@@ -3,7 +3,7 @@
   "name": "TubeRemote",
   "version": "2.0.0",
   "description": "Control YouTube from your phone via local network",
-  "permissions": ["tabs", "storage", "scripting", "debugger"],
+  "permissions": ["tabs", "storage", "scripting", "debugger", "alarms"],
   "host_permissions": [
     "http://localhost:7331/*",
     "https://www.youtube.com/*"
