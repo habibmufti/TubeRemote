@@ -2,7 +2,9 @@ let player = null
 let attachedPlayer = null
 let lastSentAt = 0
 let throttleTimer = null
+let playbackSync = null
 const THROTTLE_MS = 300
+const PLAYBACK_SYNC_MS = 2000
 let sentHomeVideoIds = new Set()
 let sentSearchVideoIds = new Set()
 let currentQuality = ''
@@ -104,6 +106,23 @@ function sendPlayerState() {
   lastSentAt = now
   chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'PLAYER_STATE', state } }).catch(() => {})
 }
+
+// A smooth seek bar can't be purely event-driven: the browser emits no event
+// when playback time drifts (buffering, ads, non-1x speed), so the remote's
+// local interpolation slowly desyncs. Correct it with a position resync that
+// runs ONLY while playing — paused/idle/browsing stays silent (no polling).
+function startPlaybackSync() {
+  if (playbackSync) return
+  playbackSync = setInterval(sendPlayerState, PLAYBACK_SYNC_MS)
+}
+
+function stopPlaybackSync() {
+  if (playbackSync) { clearInterval(playbackSync); playbackSync = null }
+}
+
+function onPlay()  { startPlaybackSync(); sendPlayerState() }
+function onPause() { stopPlaybackSync(); sendPlayerState() }
+function onEnded() { stopPlaybackSync(); sendPlayerState() }
 
 function parseHomeFromInitialData(data) {
   const results = []
@@ -237,6 +256,7 @@ function scrapeSearchResults() {
 function onLoadedMetadata() {
   sendPlayerState()
   setTimeout(fetchQualityInfo, 1500)
+  if (player && !player.paused) startPlaybackSync()
 }
 
 // Attach discrete player-event listeners once per <video> element. Idempotent:
@@ -248,14 +268,15 @@ function attachPlayer() {
   player = el
   if (el === attachedPlayer) return true
   attachedPlayer = el
-  el.addEventListener('play', sendPlayerState)
-  el.addEventListener('pause', sendPlayerState)
+  el.addEventListener('play', onPlay)
+  el.addEventListener('pause', onPause)
+  el.addEventListener('ended', onEnded)
   el.addEventListener('volumechange', sendPlayerState)
   el.addEventListener('seeked', sendPlayerState)
   el.addEventListener('ratechange', sendPlayerState)
-  el.addEventListener('ended', sendPlayerState)
   el.addEventListener('durationchange', sendPlayerState)
   el.addEventListener('loadedmetadata', onLoadedMetadata)
+  if (!el.paused) startPlaybackSync()
   return true
 }
 
