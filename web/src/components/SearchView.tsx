@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { SearchResult } from '../hooks/useSocket'
 import './SearchView.css'
 
 interface Props {
   results: SearchResult[]
+  loadingMore: boolean
   onSearch: (query: string) => void
+  onLoadMore: () => void
   onPlayVideo: (videoId: string) => void
 }
 
@@ -16,13 +18,29 @@ const IconPlay = () => (
   <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
 )
 
-export default function SearchView({ results, onSearch, onPlayVideo }: Props) {
+export default function SearchView({ results, loadingMore, onSearch, onLoadMore, onPlayVideo }: Props) {
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
+  const sentinelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (results.length > 0) setSearching(false)
   }, [results])
+
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !searching && !loadingMore && results.length > 0) {
+          onLoadMore()
+        }
+      },
+      { threshold: 0.1 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [searching, loadingMore, results.length, onLoadMore])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -73,6 +91,11 @@ export default function SearchView({ results, onSearch, onPlayVideo }: Props) {
             <div className="play-arrow"><IconPlay /></div>
           </button>
         ))}
+        {results.length > 0 && (
+          <div ref={sentinelRef} className="load-more-sentinel">
+            {loadingMore && <div className="spinner-sm" />}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -10,6 +10,9 @@ export interface PlayerState {
   isMuted: boolean
   title: string
   channelName: string
+  videoId: string
+  quality: string
+  availableQualities: string[]
 }
 
 export interface SearchResult {
@@ -20,10 +23,21 @@ export interface SearchResult {
   duration: string
 }
 
+export interface Comment {
+  author: string
+  text: string
+  likes: string
+  avatar: string
+}
+
 interface UseSocketOptions {
   token: string
   onPlayerState: (state: PlayerState) => void
   onSearchResults: (results: SearchResult[]) => void
+  onSearchMoreResults: (results: SearchResult[]) => void
+  onHomeResults: (results: SearchResult[]) => void
+  onHomeMoreResults: (results: SearchResult[]) => void
+  onQualityInfo: (quality: string, availableQualities: string[]) => void
   onPeerConnected: () => void
   onPeerDisconnected: () => void
 }
@@ -32,6 +46,10 @@ export function useSocket({
   token,
   onPlayerState,
   onSearchResults,
+  onSearchMoreResults,
+  onHomeResults,
+  onHomeMoreResults,
+  onQualityInfo,
   onPeerConnected,
   onPeerDisconnected,
 }: UseSocketOptions) {
@@ -61,6 +79,14 @@ export function useSocket({
               onPlayerState(msg.state)
             } else if (msg.action === 'SEARCH_RESULTS' && msg.results) {
               onSearchResults(msg.results)
+            } else if (msg.action === 'SEARCH_MORE_RESULTS' && msg.results) {
+              onSearchMoreResults(msg.results)
+            } else if (msg.action === 'HOME_RESULTS' && msg.results) {
+              onHomeResults(msg.results)
+            } else if (msg.action === 'HOME_MORE_RESULTS' && msg.results) {
+              onHomeMoreResults(msg.results)
+            } else if (msg.action === 'QUALITY_INFO') {
+              onQualityInfo(msg.quality || '', msg.availableQualities || [])
             }
             break
           case 'PEER_CONNECTED':
@@ -83,7 +109,7 @@ export function useSocket({
       setStatus('error')
       ws.close()
     }
-  }, [token, onPlayerState, onSearchResults, onPeerConnected, onPeerDisconnected])
+  }, [token, onPlayerState, onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults, onQualityInfo, onPeerConnected, onPeerDisconnected])
 
   useEffect(() => {
     mountedRef.current = true

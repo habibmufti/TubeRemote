@@ -82,6 +82,41 @@ async function ensureContentScript(tabId) {
   }
 }
 
+async function handleGetQualities(tabId) {
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        const mp = document.getElementById('movie_player')
+        return {
+          quality: mp?.getPlaybackQuality?.() || '',
+          availableQualities: mp?.getAvailableQualityLevels?.() || []
+        }
+      }
+    })
+    if (res?.result && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'EVENT', action: 'QUALITY_INFO', ...res.result }))
+    }
+  } catch {}
+}
+
+async function handleSetQuality(tabId, quality) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (q) => {
+        const mp = document.getElementById('movie_player')
+        if (mp?.setPlaybackQualityRange) mp.setPlaybackQualityRange(q, q)
+        else if (mp?.setPlaybackQuality) mp.setPlaybackQuality(q)
+      },
+      args: [quality]
+    })
+    setTimeout(() => handleGetQualities(tabId), 600)
+  } catch {}
+}
+
 async function handleCommand(msg) {
   const { action, payload } = msg
   const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' })
@@ -92,6 +127,11 @@ async function handleCommand(msg) {
 
   if (action === 'FULLSCREEN') {
     await handleFullscreen(tab.id)
+    return
+  }
+
+  if (action === 'SET_QUALITY') {
+    await handleSetQuality(tab.id, payload?.quality)
     return
   }
 
@@ -170,6 +210,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'EVENT', action: message.data.action, ...message.data }))
     }
+    sendResponse({ ok: true })
+    return true
+  }
+
+  if (message.type === 'FETCH_QUALITY') {
+    chrome.tabs.query({ url: 'https://www.youtube.com/*' }).then(tabs => {
+      if (tabs.length > 0) handleGetQualities(tabs[0].id)
+    })
     sendResponse({ ok: true })
     return true
   }

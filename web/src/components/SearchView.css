@@ -161,3 +161,11 @@
 }
 
 .play-arrow svg { width: 13px; height: 13px; fill: var(--muted); }
+
+.load-more-sentinel {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  min-height: 40px;
+}

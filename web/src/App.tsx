@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react'
-import { useSocket, PlayerState, SearchResult } from './hooks/useSocket'
+import { useState, useCallback, useEffect } from 'react'
+import { useSocket, PlayerState, SearchResult, Comment } from './hooks/useSocket'
 import RemoteControl from './components/RemoteControl'
 import SearchView from './components/SearchView'
+import HomeView from './components/HomeView'
 import './App.css'
 
 function getToken(): string {
@@ -12,7 +13,7 @@ const PlayIcon = () => (
   <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
 )
 
-type Tab = 'remote' | 'search'
+type Tab = 'remote' | 'search' | 'home'
 
 export default function App() {
   const token = getToken()
@@ -20,21 +21,95 @@ export default function App() {
   const [playerState, setPlayerState] = useState<PlayerState>({
     isPlaying: false, currentTime: 0, duration: 0,
     volume: 100, isMuted: false, title: '', channelName: '',
+    videoId: '', quality: '', availableQualities: [],
   })
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false)
+  const [homeResults, setHomeResults] = useState<SearchResult[]>([])
+  const [homeLoading, setHomeLoading] = useState(false)
+  const [homeLoadingMore, setHomeLoadingMore] = useState(false)
+  const [comments, setComments] = useState<Comment[]>([])
+  const [commentsLoading, setCommentsLoading] = useState(false)
   const [extConnected, setExtConnected] = useState(false)
+
+  // Quality info arrives on its own QUALITY_INFO event; the frequent PLAYER_STATE
+  // pushes don't carry it, so preserve the last known quality instead of wiping it.
+  const onPlayerState = useCallback((state: PlayerState) => {
+    setPlayerState(prev => ({
+      ...state,
+      quality: state.quality || prev.quality,
+      availableQualities: state.availableQualities?.length ? state.availableQualities : prev.availableQualities,
+    }))
+  }, [])
 
   const onPeerConnected    = useCallback(() => setExtConnected(true), [])
   const onPeerDisconnected = useCallback(() => setExtConnected(false), [])
   const onSearchResults    = useCallback((r: SearchResult[]) => {
     setSearchResults(r)
+    setSearchLoadingMore(false)
     setTab('search')
+  }, [])
+  const onSearchMoreResults = useCallback((r: SearchResult[]) => {
+    setSearchResults(prev => [...prev, ...r])
+    setSearchLoadingMore(false)
+  }, [])
+  const onHomeResults = useCallback((r: SearchResult[]) => {
+    setHomeResults(r)
+    setHomeLoading(false)
+    setHomeLoadingMore(false)
+  }, [])
+  const onHomeMoreResults = useCallback((r: SearchResult[]) => {
+    setHomeResults(prev => [...prev, ...r])
+    setHomeLoadingMore(false)
+  }, [])
+
+  const onQualityInfo = useCallback((quality: string, availableQualities: string[]) => {
+    setPlayerState(prev => ({ ...prev, quality, availableQualities }))
   }, [])
 
   const { status, sendCommand } = useSocket({
-    token, onPlayerState: setPlayerState,
-    onSearchResults, onPeerConnected, onPeerDisconnected,
+    token, onPlayerState,
+    onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults,
+    onQualityInfo, onPeerConnected, onPeerDisconnected,
   })
+
+  // Comments belong to the current video — clear them whenever the video changes.
+  useEffect(() => { setComments([]) }, [playerState.videoId])
+
+  // Comments are fetched server-side by the local binary (native YouTube API),
+  // so no page scrolling on the PC and it works even for manually-opened videos.
+  const loadComments = useCallback(async () => {
+    if (!playerState.videoId) return
+    setCommentsLoading(true)
+    try {
+      const res = await fetch(`/api/comments?v=${encodeURIComponent(playerState.videoId)}&token=${encodeURIComponent(token)}`)
+      const data = await res.json()
+      setComments(Array.isArray(data.comments) ? data.comments : [])
+    } catch {
+      setComments([])
+    } finally {
+      setCommentsLoading(false)
+    }
+  }, [playerState.videoId, token])
+
+  const loadMoreSearch = useCallback(() => {
+    setSearchLoadingMore(true)
+    sendCommand('SCROLL_SEARCH')
+    setTimeout(() => setSearchLoadingMore(false), 8000)
+  }, [sendCommand])
+
+  const loadHomeVideos = useCallback(() => {
+    setHomeLoading(true)
+    setHomeLoadingMore(false)
+    sendCommand('GET_HOME_VIDEOS')
+    setTimeout(() => setHomeLoading(false), 15000)
+  }, [sendCommand])
+
+  const loadMoreHomeVideos = useCallback(() => {
+    setHomeLoadingMore(true)
+    sendCommand('SCROLL_HOME')
+    setTimeout(() => setHomeLoadingMore(false), 8000)
+  }, [sendCommand])
 
   if (!token) {
     return (
@@ -69,16 +144,37 @@ export default function App() {
         <button className={`tab ${tab === 'search' ? 'active' : ''}`} onClick={() => setTab('search')}>
           Search
         </button>
+        <button className={`tab ${tab === 'home' ? 'active' : ''}`} onClick={() => { setTab('home'); loadHomeVideos() }}>
+          Home
+        </button>
       </nav>
 
       <main className="content">
         {tab === 'remote' && (
-          <RemoteControl playerState={playerState} onCommand={sendCommand} />
+          <RemoteControl
+            playerState={playerState}
+            onCommand={sendCommand}
+            comments={comments}
+            commentsLoading={commentsLoading}
+            onLoadComments={loadComments}
+          />
         )}
         {tab === 'search' && (
           <SearchView
             results={searchResults}
+            loadingMore={searchLoadingMore}
             onSearch={(q) => sendCommand('SEARCH', { query: q })}
+            onLoadMore={loadMoreSearch}
+            onPlayVideo={(id) => { sendCommand('PLAY_VIDEO', { videoId: id }); setTab('remote') }}
+          />
+        )}
+        {tab === 'home' && (
+          <HomeView
+            results={homeResults}
+            loading={homeLoading}
+            loadingMore={homeLoadingMore}
+            onRefresh={loadHomeVideos}
+            onLoadMore={loadMoreHomeVideos}
             onPlayVideo={(id) => { sendCommand('PLAY_VIDEO', { videoId: id }); setTab('remote') }}
           />
         )}

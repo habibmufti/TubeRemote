@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/tuberemote/internal/qr"
+	"github.com/tuberemote/internal/youtube"
 )
 
 const (
@@ -64,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/qr", s.handleQR)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/comments", s.handleComments)
 	mux.Handle("/", http.FileServer(http.FS(s.webFS)))
 	return mux
 }
@@ -93,6 +95,31 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"remoteConnected":    remConnected,
 		"token":              s.token,
 	})
+}
+
+func (s *Server) handleComments(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.URL.Query().Get("token") != s.token {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": "unauthorized"})
+		return
+	}
+	videoID := r.URL.Query().Get("v")
+	if videoID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": "missing video id"})
+		return
+	}
+
+	comments, err := youtube.FetchComments(videoID, 40)
+	if err != nil {
+		log.Println("comments fetch error:", err)
+		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"comments": comments})
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
