@@ -21,7 +21,11 @@ function extractChannelName(el) {
     '#channel-name a, #channel-name #text, ' +
     'yt-formatted-string.ytd-channel-name, .yt-content-metadata-view-model-wiz__metadata-text'
   )
-  return c?.textContent?.trim() || ''
+  const name = c?.textContent?.trim()
+  if (name) return name
+  // Last resort: any link that points to a channel — its text is the channel name.
+  const link = el.querySelector('a[href^="/@"], a[href*="/channel/"], a[href*="/c/"], a[href*="/user/"]')
+  return link?.textContent?.trim() || ''
 }
 
 function isExtensionValid() {
