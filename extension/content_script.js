@@ -1,13 +1,13 @@
 let player = null
-let stateInterval = null
+let attachedPlayer = null
 let lastSentAt = 0
+let throttleTimer = null
 const THROTTLE_MS = 300
-let homeScrapePending = false
-let searchScrapePending = false
 let sentHomeVideoIds = new Set()
 let sentSearchVideoIds = new Set()
 let currentQuality = ''
 let availableQualities = []
+let playerObserver = null
 
 function findPlayer() {
   return document.querySelector('video')
@@ -86,10 +86,19 @@ function readYtInitialData() {
   return null
 }
 
+// Throttled, trailing-edge state push. Discrete player events (play/pause/seek/
+// volume/rate/etc.) drive this — there is no periodic poll, so the trailing send
+// guarantees the final value of a burst (e.g. a volume drag) still reaches the remote.
 function sendPlayerState() {
   if (!isExtensionValid()) return
   const now = Date.now()
-  if (now - lastSentAt < THROTTLE_MS) return
+  const elapsed = now - lastSentAt
+  if (elapsed < THROTTLE_MS) {
+    if (!throttleTimer) {
+      throttleTimer = setTimeout(() => { throttleTimer = null; sendPlayerState() }, THROTTLE_MS - elapsed)
+    }
+    return
+  }
   const state = getPlayerState()
   if (!state) return
   lastSentAt = now
@@ -121,40 +130,18 @@ function parseHomeFromInitialData(data) {
   return results
 }
 
-function scrapeHomeVideos(retries = 0) {
-  homeScrapePending = false
-
-  function finish(results) {
-    if (results.length === 0 && retries < 8) {
-      homeScrapePending = true
-      setTimeout(() => scrapeHomeVideos(retries + 1), 1500)
-      return
-    }
-    results.forEach(r => sentHomeVideoIds.add(r.videoId))
-    if (isExtensionValid()) {
-      chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'HOME_RESULTS', results } }).catch(() => {})
-    }
-  }
-
-  // Primary: read ytInitialData from existing script tags — no injection, no CSP issues
-  const data = readYtInitialData()
-  const ytResults = data ? parseHomeFromInitialData(data) : []
-  if (ytResults.length > 0) {
-    finish(ytResults)
-    return
-  }
-
-  // Fallback: DOM scraping
-  const domResults = []
-  const seen = new Set()
+// Scrape home-grid video items from the DOM, skipping any IDs already in `skip`
+// (and adding new ones to it). Shared by the initial scrape and SCROLL_HOME.
+function scrapeHomeDom(skip) {
+  const results = []
   document.querySelectorAll('ytd-rich-item-renderer a[href*="/watch?v="]').forEach(a => {
-    if (domResults.length >= 20) return
+    if (results.length >= 20) return
     const videoId = new URLSearchParams(a.search).get('v')
-    if (!videoId || seen.has(videoId)) return
-    seen.add(videoId)
+    if (!videoId || skip.has(videoId)) return
+    skip.add(videoId)
     const item = a.closest('ytd-rich-item-renderer')
     const imgSrc = item?.querySelector('img[src*="ytimg"], img')?.src
-    domResults.push({
+    results.push({
       videoId,
       title: (item?.querySelector('#video-title-link, #video-title, h3 a') || a).textContent?.trim() || '',
       channelName: item ? extractChannelName(item) : '',
@@ -162,7 +149,50 @@ function scrapeHomeVideos(retries = 0) {
       duration: item?.querySelector('.ytd-thumbnail-overlay-time-status-renderer')?.textContent?.trim() || ''
     })
   })
-  finish(domResults)
+  return results
+}
+
+// Wait (event-driven) until `check()` returns a truthy value, then call onReady.
+// Replaces fixed-delay/retry polling: a MutationObserver fires as the page renders,
+// with a timeout as the final fallback. `check` must return null until ready.
+function waitForContent(check, onReady, timeout = 12000) {
+  const immediate = check()
+  if (immediate) { onReady(immediate); return }
+
+  let settled = false
+  let obs = null
+  let timer = null
+  const finish = (r) => {
+    if (settled) return
+    settled = true
+    if (obs) obs.disconnect()
+    if (timer) clearTimeout(timer)
+    onReady(r)
+  }
+  obs = new MutationObserver(() => { const r = check(); if (r) finish(r) })
+  obs.observe(document.body || document.documentElement, { childList: true, subtree: true })
+  timer = setTimeout(() => finish(check()), timeout)
+}
+
+function scrapeHomeVideos() {
+  waitForContent(
+    () => {
+      // Primary: ytInitialData from existing script tags — no injection, no CSP issues
+      const data = readYtInitialData()
+      const yt = data ? parseHomeFromInitialData(data) : []
+      if (yt.length > 0) return yt
+      // Fallback: DOM scraping
+      const dom = scrapeHomeDom(new Set())
+      return dom.length > 0 ? dom : null
+    },
+    (results) => {
+      const list = results || []
+      list.forEach(r => sentHomeVideoIds.add(r.videoId))
+      if (isExtensionValid()) {
+        chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'HOME_RESULTS', results: list } }).catch(() => {})
+      }
+    }
+  )
 }
 
 // Scrape search-result video items, skipping any IDs already in `skip` (and adding new ones to it).
@@ -190,37 +220,70 @@ function scrapeSearchItems(skip) {
 }
 
 function scrapeSearchResults() {
-  searchScrapePending = false
   sentSearchVideoIds = new Set()
-  const results = scrapeSearchItems(sentSearchVideoIds)
-  if (isExtensionValid()) {
-    chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'SEARCH_RESULTS', results } }).catch(() => {})
-  }
+  waitForContent(
+    () => {
+      const r = scrapeSearchItems(sentSearchVideoIds)
+      return r.length > 0 ? r : null
+    },
+    (results) => {
+      if (isExtensionValid()) {
+        chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'SEARCH_RESULTS', results: results || [] } }).catch(() => {})
+      }
+    }
+  )
 }
 
+function onLoadedMetadata() {
+  sendPlayerState()
+  setTimeout(fetchQualityInfo, 1500)
+}
+
+// Attach discrete player-event listeners once per <video> element. Idempotent:
+// re-attaching to the same element (e.g. across SPA navigation, where YouTube
+// reuses the element) is a no-op, so no duplicate listeners accumulate.
+function attachPlayer() {
+  const el = findPlayer()
+  if (!el) return false
+  player = el
+  if (el === attachedPlayer) return true
+  attachedPlayer = el
+  el.addEventListener('play', sendPlayerState)
+  el.addEventListener('pause', sendPlayerState)
+  el.addEventListener('volumechange', sendPlayerState)
+  el.addEventListener('seeked', sendPlayerState)
+  el.addEventListener('ratechange', sendPlayerState)
+  el.addEventListener('ended', sendPlayerState)
+  el.addEventListener('durationchange', sendPlayerState)
+  el.addEventListener('loadedmetadata', onLoadedMetadata)
+  return true
+}
+
+// Ensure we're attached to the player. If it isn't in the DOM yet (watch page
+// still rendering), wait for it via MutationObserver instead of polling on a timer.
+function ensurePlayer() {
+  if (attachPlayer()) return
+  if (!location.pathname.startsWith('/watch')) return  // no <video> off the watch page
+  if (playerObserver) return
+
+  const stop = () => { if (playerObserver) { playerObserver.disconnect(); playerObserver = null } }
+  playerObserver = new MutationObserver(() => {
+    if (attachPlayer()) { stop(); sendPlayerState() }
+  })
+  playerObserver.observe(document.body || document.documentElement, { childList: true, subtree: true })
+  setTimeout(stop, 15000)  // safety cap: don't observe forever if the player never shows
+}
+
+function handlePageScrape() {
+  if (location.href.includes('/results?search_query=')) scrapeSearchResults()
+  else if (location.pathname === '/') scrapeHomeVideos()
+}
+
+// Single entry point for both first load and SPA navigation (yt-navigate-finish).
 function init() {
-  player = findPlayer()
-  if (player) {
-    player.addEventListener('play', sendPlayerState)
-    player.addEventListener('pause', sendPlayerState)
-    player.addEventListener('volumechange', sendPlayerState)
-    player.addEventListener('loadedmetadata', () => { sendPlayerState(); setTimeout(fetchQualityInfo, 1500) })
-    setTimeout(sendPlayerState, 500)
-    if (stateInterval) clearInterval(stateInterval)
-    stateInterval = setInterval(sendPlayerState, 2000)
-  } else {
-    setTimeout(init, 2000)
-  }
-
-  if (location.href.includes('/results?search_query=') && !searchScrapePending) {
-    searchScrapePending = true
-    setTimeout(scrapeSearchResults, 3000)
-  }
-
-  if (location.pathname === '/' && !homeScrapePending) {
-    homeScrapePending = true
-    setTimeout(scrapeHomeVideos, 3000)
-  }
+  ensurePlayer()
+  setTimeout(sendPlayerState, 500)  // let title/metadata settle, then resync
+  handlePageScrape()
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -295,24 +358,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (location.pathname === '/') {
         window.scrollBy(0, window.innerHeight * 2)
         setTimeout(() => {
-          const newResults = []
-          const seen = new Set(sentHomeVideoIds)
-          document.querySelectorAll('ytd-rich-item-renderer a[href*="/watch?v="]').forEach(a => {
-            if (newResults.length >= 20) return
-            const videoId = new URLSearchParams(a.search).get('v')
-            if (!videoId || seen.has(videoId)) return
-            seen.add(videoId)
-            sentHomeVideoIds.add(videoId)
-            const item = a.closest('ytd-rich-item-renderer')
-            const imgSrc = item?.querySelector('img[src*="ytimg"], img')?.src
-            newResults.push({
-              videoId,
-              title: (item?.querySelector('#video-title-link, #video-title, h3 a') || a).textContent?.trim() || '',
-              channelName: item ? extractChannelName(item) : '',
-              thumbnail: imgSrc && imgSrc.includes('ytimg') ? imgSrc : `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-              duration: item?.querySelector('.ytd-thumbnail-overlay-time-status-renderer')?.textContent?.trim() || ''
-            })
-          })
+          const newResults = scrapeHomeDom(sentHomeVideoIds)
           if (isExtensionValid() && newResults.length > 0) {
             chrome.runtime.sendMessage({ type: 'EVENT', data: { action: 'HOME_MORE_RESULTS', results: newResults } }).catch(() => {})
           }
@@ -340,6 +386,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   sendResponse({ ok: true })
   setTimeout(sendPlayerState, 200)
 })
+
+// YouTube is a SPA: most navigation fires yt-navigate-finish instead of a full
+// page load. Re-run init so we re-attach to the new video and refresh state/results.
+document.addEventListener('yt-navigate-finish', init)
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init)
