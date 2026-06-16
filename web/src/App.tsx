@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useSocket, PlayerState, SearchResult, Comment } from './hooks/useSocket'
+import { useSocket, PlayerState, SearchResult, Comment, VideoInfo } from './hooks/useSocket'
 import RemoteControl from './components/RemoteControl'
 import SearchView from './components/SearchView'
 import HomeView from './components/HomeView'
@@ -30,6 +30,9 @@ export default function App() {
   const [homeLoadingMore, setHomeLoadingMore] = useState(false)
   const [comments, setComments] = useState<Comment[]>([])
   const [commentsLoading, setCommentsLoading] = useState(false)
+  const [commentsLoadingMore, setCommentsLoadingMore] = useState(false)
+  const [commentsCursor, setCommentsCursor] = useState('')
+  const [videoInfo, setVideoInfo] = useState<VideoInfo>({ description: '', author: '', views: '' })
   const [extConnected, setExtConnected] = useState(false)
 
   // Quality info arrives on its own QUALITY_INFO event; the frequent PLAYER_STATE
@@ -73,11 +76,23 @@ export default function App() {
     onQualityInfo, onPeerConnected, onPeerDisconnected,
   })
 
-  // Comments belong to the current video — clear them whenever the video changes.
-  useEffect(() => { setComments([]) }, [playerState.videoId])
+  // On video change: reset comments and auto-load the description (lightweight,
+  // fetched server-side by the local binary via the native YouTube API).
+  useEffect(() => {
+    setComments([])
+    setCommentsCursor('')
+    setVideoInfo({ description: '', author: '', views: '' })
+    if (!playerState.videoId) return
+    let cancelled = false
+    fetch(`/api/video?v=${encodeURIComponent(playerState.videoId)}&token=${encodeURIComponent(token)}`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setVideoInfo({ description: d.description || '', author: d.author || '', views: d.views || '' }) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [playerState.videoId, token])
 
-  // Comments are fetched server-side by the local binary (native YouTube API),
-  // so no page scrolling on the PC and it works even for manually-opened videos.
+  // Comments are fetched server-side too — no page scrolling on the PC, and it
+  // works even for videos opened manually on the PC.
   const loadComments = useCallback(async () => {
     if (!playerState.videoId) return
     setCommentsLoading(true)
@@ -85,12 +100,29 @@ export default function App() {
       const res = await fetch(`/api/comments?v=${encodeURIComponent(playerState.videoId)}&token=${encodeURIComponent(token)}`)
       const data = await res.json()
       setComments(Array.isArray(data.comments) ? data.comments : [])
+      setCommentsCursor(data.continuation || '')
     } catch {
       setComments([])
+      setCommentsCursor('')
     } finally {
       setCommentsLoading(false)
     }
   }, [playerState.videoId, token])
+
+  const loadMoreComments = useCallback(async () => {
+    if (!commentsCursor) return
+    setCommentsLoadingMore(true)
+    try {
+      const res = await fetch(`/api/comments?continuation=${encodeURIComponent(commentsCursor)}&token=${encodeURIComponent(token)}`)
+      const data = await res.json()
+      setComments(prev => [...prev, ...(Array.isArray(data.comments) ? data.comments : [])])
+      setCommentsCursor(data.continuation || '')
+    } catch {
+      // keep what we have; cursor unchanged so the user can retry
+    } finally {
+      setCommentsLoadingMore(false)
+    }
+  }, [commentsCursor, token])
 
   const loadMoreSearch = useCallback(() => {
     setSearchLoadingMore(true)
@@ -154,9 +186,14 @@ export default function App() {
           <RemoteControl
             playerState={playerState}
             onCommand={sendCommand}
+            description={videoInfo.description}
+            views={videoInfo.views}
             comments={comments}
             commentsLoading={commentsLoading}
+            commentsLoadingMore={commentsLoadingMore}
+            hasMoreComments={!!commentsCursor}
             onLoadComments={loadComments}
+            onLoadMoreComments={loadMoreComments}
           />
         )}
         {tab === 'search' && (

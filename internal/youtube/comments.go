@@ -20,6 +20,20 @@ type Comment struct {
 	Avatar string `json:"avatar"`
 }
 
+// CommentPage is one page of comments plus a token to fetch the next page
+// (empty when there are no more).
+type CommentPage struct {
+	Comments     []Comment `json:"comments"`
+	Continuation string    `json:"continuation"`
+}
+
+// VideoInfo holds lightweight metadata shown alongside the player.
+type VideoInfo struct {
+	Description string `json:"description"`
+	Author      string `json:"author"`
+	Views       string `json:"views"`
+}
+
 const (
 	innertubeKey  = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 	clientVersion = "2.20240711.01.00"
@@ -28,29 +42,60 @@ const (
 
 var httpClient = &http.Client{Timeout: 12 * time.Second}
 
-// FetchComments returns up to `limit` top-level comments for a video.
-// It makes two innertube calls: one to get the comment-section continuation
-// token, and one to load the first page of comments.
-func FetchComments(videoID string, limit int) ([]Comment, error) {
+// FetchComments returns the first page of top-level comments for a video,
+// along with a continuation token for the next page. It makes two innertube
+// calls: one to get the comment-section continuation token, and one to load
+// the first page.
+func FetchComments(videoID string) (CommentPage, error) {
 	first, err := innertubeNext(map[string]any{"videoId": videoID}, videoID)
 	if err != nil {
-		return nil, err
+		return CommentPage{Comments: []Comment{}}, err
 	}
 
 	token := findCommentToken(first)
 	if token == "" {
 		// Comments disabled, or none yet — not an error.
-		return []Comment{}, nil
+		return CommentPage{Comments: []Comment{}}, nil
 	}
+	return fetchCommentPage(token, videoID)
+}
 
+// FetchCommentPage loads a further page of comments from a continuation token
+// returned by a previous call.
+func FetchCommentPage(token string) (CommentPage, error) {
+	return fetchCommentPage(token, "")
+}
+
+func fetchCommentPage(token, videoID string) (CommentPage, error) {
 	page, err := innertubeNext(map[string]any{"continuation": token}, videoID)
 	if err != nil {
-		return nil, err
+		return CommentPage{Comments: []Comment{}}, err
 	}
-	return parseComments(page, limit), nil
+	return CommentPage{
+		Comments:     parseComments(page),
+		Continuation: findContinuationToken(page),
+	}, nil
+}
+
+// FetchVideoInfo returns the description and basic metadata via the player endpoint.
+func FetchVideoInfo(videoID string) (VideoInfo, error) {
+	resp, err := innertubeCall("player", map[string]any{"videoId": videoID}, videoID)
+	if err != nil {
+		return VideoInfo{}, err
+	}
+	vd := get(resp, "videoDetails")
+	return VideoInfo{
+		Description: str(get(vd, "shortDescription")),
+		Author:      str(get(vd, "author")),
+		Views:       str(get(vd, "viewCount")),
+	}, nil
 }
 
 func innertubeNext(extra map[string]any, videoID string) (map[string]any, error) {
+	return innertubeCall("next", extra, videoID)
+}
+
+func innertubeCall(endpoint string, extra map[string]any, videoID string) (map[string]any, error) {
 	body := map[string]any{
 		"context": map[string]any{
 			"client": map[string]any{
@@ -66,7 +111,7 @@ func innertubeNext(extra map[string]any, videoID string) (map[string]any, error)
 	}
 	buf, _ := json.Marshal(body)
 
-	url := "https://www.youtube.com/youtubei/v1/next?key=" + innertubeKey + "&prettyPrint=false"
+	url := "https://www.youtube.com/youtubei/v1/" + endpoint + "?key=" + innertubeKey + "&prettyPrint=false"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
@@ -149,7 +194,40 @@ func findTokenDeep(v any) string {
 	return ""
 }
 
-func parseComments(resp map[string]any, limit int) []Comment {
+// continuationItems gathers the continuation items from a response endpoint.
+// The first comment page uses *Command wrappers; later pages use *Action ones.
+func continuationItems(resp map[string]any) []any {
+	var items []any
+	for _, ep := range slice(resp["onResponseReceivedEndpoints"]) {
+		for _, key := range []string{
+			"reloadContinuationItemsCommand", "appendContinuationItemsCommand",
+			"reloadContinuationItemsAction", "appendContinuationItemsAction",
+		} {
+			items = append(items, slice(get(ep, key, "continuationItems"))...)
+		}
+	}
+	return items
+}
+
+// findContinuationToken returns the token to load the next page of comments,
+// found in the trailing (top-level) continuationItemRenderer — empty on the last page.
+func findContinuationToken(page map[string]any) string {
+	for _, it := range continuationItems(page) {
+		cir := get(it, "continuationItemRenderer")
+		if cir == nil {
+			continue
+		}
+		if tok := str(get(cir, "continuationEndpoint", "continuationCommand", "token")); tok != "" {
+			return tok
+		}
+		if tok := str(get(cir, "button", "buttonRenderer", "command", "continuationCommand", "token")); tok != "" {
+			return tok
+		}
+	}
+	return ""
+}
+
+func parseComments(resp map[string]any) []Comment {
 	// Modern YouTube stores comment data in "entity" mutations keyed by id;
 	// the continuation items only reference those keys.
 	entities := map[string]map[string]any{}
@@ -161,17 +239,8 @@ func parseComments(resp map[string]any, limit int) []Comment {
 		}
 	}
 
-	var items []any
-	for _, ep := range slice(resp["onResponseReceivedEndpoints"]) {
-		items = append(items, slice(get(ep, "reloadContinuationItemsCommand", "continuationItems"))...)
-		items = append(items, slice(get(ep, "appendContinuationItemsCommand", "continuationItems"))...)
-	}
-
 	out := []Comment{}
-	for _, it := range items {
-		if len(out) >= limit {
-			break
-		}
+	for _, it := range continuationItems(resp) {
 		ctr := get(it, "commentThreadRenderer")
 		if ctr == nil {
 			continue
@@ -196,9 +265,6 @@ func parseComments(resp map[string]any, limit int) []Comment {
 	// Fallback: if item linkage changed, surface whatever entities we have.
 	if len(out) == 0 {
 		for _, p := range entities {
-			if len(out) >= limit {
-				break
-			}
 			if c := commentFromEntity(p); c.Text != "" {
 				out = append(out, c)
 			}

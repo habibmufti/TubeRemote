@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/qr", s.handleQR)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/comments", s.handleComments)
+	mux.HandleFunc("/api/video", s.handleVideo)
 	mux.Handle("/", http.FileServer(http.FS(s.webFS)))
 	return mux
 }
@@ -106,20 +107,51 @@ func (s *Server) handleComments(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": "unauthorized"})
 		return
 	}
-	videoID := r.URL.Query().Get("v")
-	if videoID == "" {
+	// `continuation` loads further pages; `v` loads the first page for a video.
+	var (
+		page youtube.CommentPage
+		err  error
+	)
+	if cont := r.URL.Query().Get("continuation"); cont != "" {
+		page, err = youtube.FetchCommentPage(cont)
+	} else if videoID := r.URL.Query().Get("v"); videoID != "" {
+		page, err = youtube.FetchComments(videoID)
+	} else {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": "missing video id"})
 		return
 	}
-
-	comments, err := youtube.FetchComments(videoID, 40)
 	if err != nil {
 		log.Println("comments fetch error:", err)
 		json.NewEncoder(w).Encode(map[string]any{"comments": []any{}, "error": err.Error()})
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]any{"comments": comments})
+	json.NewEncoder(w).Encode(page)
+}
+
+func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.URL.Query().Get("token") != s.token {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]any{"error": "unauthorized"})
+		return
+	}
+	videoID := r.URL.Query().Get("v")
+	if videoID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": "missing video id"})
+		return
+	}
+
+	info, err := youtube.FetchVideoInfo(videoID)
+	if err != nil {
+		log.Println("video info fetch error:", err)
+		json.NewEncoder(w).Encode(map[string]any{"description": "", "error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(info)
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {

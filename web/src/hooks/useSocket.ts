@@ -30,6 +30,12 @@ export interface Comment {
   avatar: string
 }
 
+export interface VideoInfo {
+  description: string
+  author: string
+  views: string
+}
+
 interface UseSocketOptions {
   token: string
   onPlayerState: (state: PlayerState) => void

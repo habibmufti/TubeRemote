@@ -5,9 +5,14 @@ import './RemoteControl.css'
 interface Props {
   playerState: PlayerState
   onCommand: (action: string, payload?: Record<string, unknown>) => void
+  description: string
+  views: string
   comments: Comment[]
   commentsLoading: boolean
+  commentsLoadingMore: boolean
+  hasMoreComments: boolean
   onLoadComments: () => void
+  onLoadMoreComments: () => void
 }
 
 function fmtTime(s: number) {
@@ -32,21 +37,62 @@ const QUALITY_LABELS: Record<string, string> = {
 }
 function qualityLabel(q: string) { return QUALITY_LABELS[q] ?? q }
 
+function fmtViews(v: string) {
+  const n = parseInt(v, 10)
+  if (!n) return ''
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B views'
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M views'
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K views'
+  return n + ' views'
+}
+
 function VolIcon({ v, muted }: { v: number; muted: boolean }) {
   if (muted || v === 0) return <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>
   if (v < 50) return <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/></svg>
   return <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
 }
 
-export default function RemoteControl({ playerState, onCommand, comments, commentsLoading, onLoadComments }: Props) {
+export default function RemoteControl({
+  playerState, onCommand, description, views,
+  comments, commentsLoading, commentsLoadingMore, hasMoreComments,
+  onLoadComments, onLoadMoreComments,
+}: Props) {
   const [localVol, setLocalVol] = useState(playerState.volume)
   const [seeking, setSeeking]   = useState(false)
   const [seekVal, setSeekVal]   = useState(0)
   const [displayTime, setDisplayTime] = useState(playerState.currentTime)
   const [titleOverflow, setTitleOverflow] = useState(false)
   const [qualityOpen, setQualityOpen] = useState(false)
+  const [descExpanded, setDescExpanded] = useState(false)
+  const [descOverflow, setDescOverflow] = useState(false)
 
   const qualityPickerRef = useRef<HTMLDivElement>(null)
+  const descRef = useRef<HTMLDivElement>(null)
+  const commentsSentinelRef = useRef<HTMLDivElement>(null)
+
+  // Detect whether the (clamped) description is long enough to need a toggle.
+  useEffect(() => {
+    setDescExpanded(false)
+    const el = descRef.current
+    if (!el) { setDescOverflow(false); return }
+    requestAnimationFrame(() => setDescOverflow(el.scrollHeight > el.clientHeight + 4))
+  }, [description])
+
+  // Infinite scroll for comments.
+  useEffect(() => {
+    const el = commentsSentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && hasMoreComments && !commentsLoading && !commentsLoadingMore) {
+          onLoadMoreComments()
+        }
+      },
+      { threshold: 0.1 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMoreComments, commentsLoading, commentsLoadingMore, onLoadMoreComments, comments.length])
 
   const orderedQualities = useMemo(() => {
     const order = ['hd2160','hd1440','hd1080','hd720','large','medium','small','tiny','auto']
@@ -220,6 +266,24 @@ export default function RemoteControl({ playerState, onCommand, comments, commen
         )}
       </div>
 
+      {/* Description */}
+      {playerState.title && description && (
+        <div className="desc-section">
+          <div className="desc-head">
+            <span className="desc-title">Description</span>
+            {views && <span className="desc-views">{fmtViews(views)}</span>}
+          </div>
+          <div ref={descRef} className={`desc-text${descExpanded ? '' : ' clamped'}`}>
+            {description}
+          </div>
+          {descOverflow && (
+            <button className="desc-toggle" onClick={() => setDescExpanded(e => !e)}>
+              {descExpanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Comments */}
       {playerState.title && (
         <div className="comments-section">
@@ -260,6 +324,11 @@ export default function RemoteControl({ playerState, onCommand, comments, commen
                 </div>
               </div>
             ))}
+            {comments.length > 0 && (
+              <div ref={commentsSentinelRef} className="load-more-sentinel">
+                {commentsLoadingMore && <span className="cm-spinner" />}
+              </div>
+            )}
           </div>
         </div>
       )}
