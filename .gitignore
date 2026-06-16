@@ -1,0 +1,10 @@
+# Go
+bin/
+
+# Web
+web/node_modules/
+web/dist/
+
+# Misc
+.DS_Store
+*.env
