@@ -16,7 +16,7 @@ const PlayIcon = () => (
 type Tab = 'remote' | 'search' | 'home'
 
 export default function App() {
-  const token = getToken()
+  const [token, setToken] = useState(getToken)
   const [tab, setTab] = useState<Tab>('remote')
   const [playerState, setPlayerState] = useState<PlayerState>({
     isPlaying: false, currentTime: 0, duration: 0,
@@ -70,10 +70,27 @@ export default function App() {
     setPlayerState(prev => ({ ...prev, quality, availableQualities }))
   }, [])
 
+  // The token baked into the QR URL goes stale when the binary restarts with a
+  // fresh one. On rejection, fetch the current token from the binary and adopt
+  // it: useSocket reconnects with the new token, and the REST calls below (which
+  // also carry it) start authorizing again. Keep the URL in sync so a reload works.
+  const onUnauthorized = useCallback(async () => {
+    try {
+      const res = await fetch('/api/status')
+      const data = await res.json()
+      if (data?.token && data.token !== token) {
+        setToken(data.token)
+        const url = new URL(location.href)
+        url.searchParams.set('token', data.token)
+        history.replaceState(null, '', url)
+      }
+    } catch {}
+  }, [token])
+
   const { status, sendCommand } = useSocket({
     token, onPlayerState,
     onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults,
-    onQualityInfo, onPeerConnected, onPeerDisconnected,
+    onQualityInfo, onPeerConnected, onPeerDisconnected, onUnauthorized,
   })
 
   // On video change: reset comments and auto-load the description (lightweight,

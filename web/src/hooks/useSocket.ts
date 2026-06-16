@@ -46,6 +46,7 @@ interface UseSocketOptions {
   onQualityInfo: (quality: string, availableQualities: string[]) => void
   onPeerConnected: () => void
   onPeerDisconnected: () => void
+  onUnauthorized: () => void
 }
 
 export function useSocket({
@@ -58,6 +59,7 @@ export function useSocket({
   onQualityInfo,
   onPeerConnected,
   onPeerDisconnected,
+  onUnauthorized,
 }: UseSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
@@ -101,6 +103,12 @@ export function useSocket({
           case 'PEER_DISCONNECTED':
             onPeerDisconnected()
             break
+          case 'ERROR':
+            // Server rejected our token — usually stale after the binary
+            // restarted with a fresh one. Ask the app to pick up the current
+            // token; the onclose reconnect below then retries with it.
+            onUnauthorized()
+            break
         }
       } catch {}
     }
@@ -115,7 +123,7 @@ export function useSocket({
       setStatus('error')
       ws.close()
     }
-  }, [token, onPlayerState, onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults, onQualityInfo, onPeerConnected, onPeerDisconnected])
+  }, [token, onPlayerState, onSearchResults, onSearchMoreResults, onHomeResults, onHomeMoreResults, onQualityInfo, onPeerConnected, onPeerDisconnected, onUnauthorized])
 
   useEffect(() => {
     mountedRef.current = true
