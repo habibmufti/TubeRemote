@@ -1,14 +1,18 @@
 // Package youtube fetches data from YouTube's internal "innertube" API —
 // the same private endpoints the web client (and tools like yt-dlp) use.
-// No API key registration is needed: the web client key below is public and stable.
+// No API key registration is needed: the public web-client key is scraped from
+// youtube.com at runtime (see innertubeAPIKey) and cached for the process.
 package youtube
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -35,12 +39,59 @@ type VideoInfo struct {
 }
 
 const (
-	innertubeKey  = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 	clientVersion = "2.20240711.01.00"
 	userAgent     = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
 var httpClient = &http.Client{Timeout: 12 * time.Second}
+
+// innertube web-client key, scraped from youtube.com on first use and cached.
+var (
+	keyMu     sync.Mutex
+	cachedKey string
+	keyRe     = regexp.MustCompile(`"INNERTUBE_API_KEY":"([^"]+)"`)
+)
+
+// innertubeAPIKey returns YouTube's public web-client API key. It scrapes the
+// key from the youtube.com home page on first call and caches it for the rest
+// of the process. This key is a fixed, public constant shipped in YouTube's web
+// page (the same one used by yt-dlp and the browser) — not a personal secret —
+// but fetching it at runtime keeps it out of the source and survives the rare
+// case where YouTube rotates it.
+func innertubeAPIKey() (string, error) {
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	if cachedKey != "" {
+		return cachedKey, nil
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://www.youtube.com/", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Cookie", "SOCS=CAI") // skips EU consent interstitial
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch youtube.com: status %d", resp.StatusCode)
+	}
+
+	html, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	m := keyRe.FindSubmatch(html)
+	if m == nil {
+		return "", fmt.Errorf("innertube api key not found on youtube.com")
+	}
+	cachedKey = string(m[1])
+	return cachedKey, nil
+}
 
 // FetchComments returns the first page of top-level comments for a video,
 // along with a continuation token for the next page. It makes two innertube
@@ -111,7 +162,11 @@ func innertubeCall(endpoint string, extra map[string]any, videoID string) (map[s
 	}
 	buf, _ := json.Marshal(body)
 
-	url := "https://www.youtube.com/youtubei/v1/" + endpoint + "?key=" + innertubeKey + "&prettyPrint=false"
+	key, err := innertubeAPIKey()
+	if err != nil {
+		return nil, err
+	}
+	url := "https://www.youtube.com/youtubei/v1/" + endpoint + "?key=" + key + "&prettyPrint=false"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
 		return nil, err
