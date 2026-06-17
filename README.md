@@ -46,7 +46,47 @@ locally and is corrected by a position resync that runs **only while playing**.
 - For building from source: [Go](https://go.dev/) 1.21+ and
   [Bun](https://bun.sh/) (for the web build)
 
-## Build
+## Download & install
+
+Grab the latest [**release**](https://github.com/habibmufti/TubeRemote/releases/latest).
+You need **two** things: the binary for your PC, and the Chrome extension.
+
+### 1. The PC binary
+
+Download the file for your platform:
+
+| Platform              | File                              |
+| --------------------- | --------------------------------- |
+| Windows               | `tuberemote-windows-amd64.exe`    |
+| macOS (Apple Silicon) | `tuberemote-macos-arm64`          |
+| macOS (Intel)         | `tuberemote-macos-amd64`          |
+| Linux                 | `tuberemote-linux-amd64`          |
+
+- **Windows** — double-click the `.exe`. If SmartScreen warns, choose *More
+  info → Run anyway* (the binary is unsigned).
+- **macOS / Linux** — make it executable and run it:
+  ```sh
+  chmod +x tuberemote-macos-arm64
+  ./tuberemote-macos-arm64
+  ```
+  On macOS, first run may need *System Settings → Privacy & Security → Open
+  Anyway* (unsigned binary).
+
+It prints a local URL and a token, and listens on port **7331**. Leave it
+running.
+
+### 2. The Chrome extension
+
+1. Download `tuberemote-extension.zip` from the release and **unzip** it.
+2. Open `chrome://extensions`
+3. Enable **Developer mode** (top right)
+4. Click **Load unpacked** and select the unzipped `tuberemote-extension` folder
+
+> Verify a download with `sha256sum -c SHA256SUMS.txt` (or `shasum -a 256`).
+
+Then jump to [Usage](#usage). To build from source instead, read on.
+
+## Build from source
 
 The web UI is built and embedded into the Go binary via `go:embed`, so a build
 always bundles the latest UI.

@@ -5,6 +5,10 @@ bin/
 web/node_modules/
 web/dist/
 
+# Release artifacts
+dist-release/
+tuberemote-extension/
+
 # Misc
 .DS_Store
 *.env
