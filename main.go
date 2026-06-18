@@ -13,6 +13,7 @@ import (
 
 	"github.com/tuberemote/internal/network"
 	"github.com/tuberemote/internal/server"
+	"github.com/tuberemote/internal/tray"
 	"github.com/tuberemote/internal/updater"
 )
 
@@ -50,16 +51,24 @@ func main() {
 
 	srv := server.New(token, localIP, port, webDist)
 
+	go func() {
+		addr := fmt.Sprintf("0.0.0.0:%d", port)
+		log.Fatal(http.ListenAndServe(addr, srv.Handler()))
+	}()
+
 	updater.CheckAndNotify(version)
 
-	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	fmt.Printf("\n  TubeRemote %s\n", version)
 	fmt.Printf("  Local:   http://localhost:%d\n", port)
 	fmt.Printf("  Network: http://%s:%d\n", localIP, port)
 	fmt.Printf("  Token:   %s\n\n", token)
-	fmt.Printf("  Open Chrome extension popup to get QR code\n\n")
 
-	log.Fatal(http.ListenAndServe(addr, srv.Handler()))
+	tray.Run(tray.Config{
+		Version: version,
+		Port:    port,
+		Token:   token,
+		OnQuit:  func() { os.Exit(0) },
+	})
 }
 
 func randomToken() string {

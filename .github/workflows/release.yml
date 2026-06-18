@@ -9,6 +9,7 @@ permissions:
   contents: write
 
 jobs:
+  # Builds Linux (CGO+GTK) + Windows (CGO_ENABLED=0) + .deb/.rpm, creates the GitHub release
   goreleaser:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +26,9 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Install GTK libs for Linux systray
+        run: sudo apt-get install -y pkg-config libgtk-3-dev libayatana-appindicator3-dev
+
       - name: Build web assets
         run: cd web && bun install && bun run build
 
@@ -36,6 +40,69 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Builds macOS binaries with native CGO (Cocoa/systray), creates .pkg installers
+  build-macos:
+    needs: goreleaser
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Get version
+        id: ver
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build web assets
+        run: cd web && bun install && bun run build
+
+      - name: Build macOS binaries
+        env:
+          VERSION: ${{ steps.ver.outputs.VERSION }}
+        run: |
+          # arm64 — native on macos-latest (Apple Silicon runner)
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 \
+            go build -ldflags "-s -w -X main.version=${VERSION}" \
+            -o tuberemote-darwin-arm64 .
+
+          # amd64 — cross-compile from arm64 runner
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 \
+            CGO_CFLAGS="-arch x86_64" CGO_LDFLAGS="-arch x86_64" \
+            go build -ldflags "-s -w -X main.version=${VERSION}" \
+            -o tuberemote-darwin-amd64 .
+
+      - name: Upload macOS binaries to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            tuberemote-darwin-amd64 \
+            tuberemote-darwin-arm64
+
+      - name: Build and upload macOS pkg installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.VERSION }}
+        run: |
+          chmod +x installers/macos/build-pkg.sh
+          for arch in amd64 arm64; do
+            bash installers/macos/build-pkg.sh \
+              "tuberemote-darwin-${arch}" \
+              "$VERSION" \
+              "$arch" \
+              "tuberemote-macos-${arch}.pkg"
+            gh release upload "${{ github.ref_name }}" \
+              "tuberemote-macos-${arch}.pkg"
+          done
+
+  # Builds Windows NSIS installer from the binary uploaded by goreleaser
   installer-windows:
     needs: goreleaser
     runs-on: windows-latest
@@ -69,33 +136,3 @@ jobs:
         run: |
           gh release upload "${{ github.ref_name }}" \
             "installers/windows/tuberemote-windows-setup.exe"
-
-  installer-macos:
-    needs: goreleaser
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Get version
-        id: ver
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Build macOS pkg installers
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ steps.ver.outputs.VERSION }}"
-          chmod +x installers/macos/build-pkg.sh
-
-          for arch in amd64 arm64; do
-            curl -fsSL -o "installers/macos/tuberemote" \
-              "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/tuberemote-darwin-${arch}"
-            bash installers/macos/build-pkg.sh \
-              "installers/macos/tuberemote" \
-              "$VERSION" \
-              "$arch" \
-              "installers/macos/tuberemote-macos-${arch}.pkg"
-            gh release upload "${{ github.ref_name }}" \
-              "installers/macos/tuberemote-macos-${arch}.pkg"
-          done
