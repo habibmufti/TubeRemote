@@ -42,6 +42,32 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Package the Chrome extension: sync its manifest version to the tag, zip it
+      # with the tuberemote-extension/ folder the README tells users to load,
+      # add its hash to SHA256SUMS.txt, and attach it to the release.
+      - name: Package and upload Chrome extension
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Sync manifest version to the release tag
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.version = $v' extension/manifest.json > "$tmp"
+          mv "$tmp" extension/manifest.json
+
+          # Zip with the wrapping folder users select via "Load unpacked"
+          cp -r extension tuberemote-extension
+          zip -r tuberemote-extension.zip tuberemote-extension
+
+          # Append the extension hash to the release's SHA256SUMS.txt
+          gh release download "$GITHUB_REF_NAME" -p SHA256SUMS.txt -O SHA256SUMS.txt
+          sha256sum tuberemote-extension.zip >> SHA256SUMS.txt
+
+          gh release upload "$GITHUB_REF_NAME" \
+            tuberemote-extension.zip \
+            SHA256SUMS.txt --clobber
+
   # Builds macOS binaries with native CGO (Cocoa/systray), creates .pkg installers
   build-macos:
     needs: goreleaser

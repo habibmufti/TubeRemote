@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TubeRemote",
-  "version": "2.0.0",
+  "version": "2.0.8",
   "description": "Control YouTube from your phone via local network",
   "permissions": ["tabs", "storage", "scripting", "debugger", "alarms"],
   "host_permissions": [
