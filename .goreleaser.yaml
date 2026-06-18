@@ -1,0 +1,66 @@
+version: 2
+
+project_name: tuberemote
+
+before:
+  hooks:
+    - go mod tidy
+    - make web
+
+builds:
+  - id: tuberemote
+    main: .
+    binary: tuberemote
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: binaries
+    format: binary
+    name_template: "{{ .Binary }}-{{ .Os }}-{{ .Arch }}"
+
+nfpms:
+  - id: linux-packages
+    builds:
+      - tuberemote
+    package_name: tuberemote
+    homepage: https://github.com/habibmufti/TubeRemote
+    description: Remote control YouTube from your phone via a Chrome extension.
+    maintainer: Habib Mufti
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/local/bin
+    file_name_template: "{{ .PackageName }}-linux-{{ .Arch }}"
+
+checksum:
+  name_template: "SHA256SUMS.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: habibmufti
+    name: TubeRemote
+  draft: false
+  prerelease: auto

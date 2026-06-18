@@ -4,21 +4,42 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/tuberemote/internal/network"
 	"github.com/tuberemote/internal/server"
+	"github.com/tuberemote/internal/updater"
 )
 
 //go:embed all:web/dist
 var webFiles embed.FS
 
+var version = "dev"
+
 const port = 7331
 
 func main() {
+	doUpdate := flag.Bool("update", false, "download and install the latest release")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("tuberemote %s\n", version)
+		os.Exit(0)
+	}
+
+	if *doUpdate {
+		if err := updater.Apply(version); err != nil {
+			log.Fatalf("update failed: %v", err)
+		}
+		os.Exit(0)
+	}
+
 	token := randomToken()
 	localIP := network.LocalIP()
 
@@ -29,8 +50,10 @@ func main() {
 
 	srv := server.New(token, localIP, port, webDist)
 
+	updater.CheckAndNotify(version)
+
 	addr := fmt.Sprintf("0.0.0.0:%d", port)
-	fmt.Printf("\n  TubeRemote running\n")
+	fmt.Printf("\n  TubeRemote %s\n", version)
 	fmt.Printf("  Local:   http://localhost:%d\n", port)
 	fmt.Printf("  Network: http://%s:%d\n", localIP, port)
 	fmt.Printf("  Token:   %s\n\n", token)

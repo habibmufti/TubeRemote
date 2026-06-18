@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build web assets
+        run: cd web && bun install && bun run build
+
+      - name: Run goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: ~> v2
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  installer-windows:
+    needs: goreleaser
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: ver
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download Windows binary
+        shell: bash
+        run: |
+          curl -fsSL -o installers/windows/tuberemote.exe \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/tuberemote-windows-amd64.exe"
+
+      - name: Build NSIS installer
+        shell: cmd
+        run: |
+          cd installers\windows
+          makensis /DVERSION=${{ steps.ver.outputs.VERSION }} setup.nsi
+
+      - name: Upload installer to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            "installers/windows/tuberemote-windows-setup.exe"
+
+  installer-macos:
+    needs: goreleaser
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: ver
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS pkg installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.VERSION }}"
+          chmod +x installers/macos/build-pkg.sh
+
+          for arch in amd64 arm64; do
+            curl -fsSL -o "installers/macos/tuberemote" \
+              "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/tuberemote-darwin-${arch}"
+            bash installers/macos/build-pkg.sh \
+              "installers/macos/tuberemote" \
+              "$VERSION" \
+              "$arch" \
+              "installers/macos/tuberemote-macos-${arch}.pkg"
+            gh release upload "${{ github.ref_name }}" \
+              "installers/macos/tuberemote-macos-${arch}.pkg"
+          done
