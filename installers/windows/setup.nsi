@@ -1,5 +1,4 @@
-!include "StrFunc.nsh"
-${StrRep}  ; declare for use in sections
+!include "WinMessages.nsh"
 
 !define APP_NAME "TubeRemote"
 !define APP_EXE "tuberemote.exe"
@@ -58,11 +57,4 @@ Section "Uninstall"
     RMDir "$SMPROGRAMS\${APP_NAME}"
 
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
-
-    ; Remove install dir from PATH
-    ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-    ${StrRep} $1 "$0" ";$INSTDIR" ""
-    WriteRegExpandStr HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" \
-        "Path" "$1"
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 SectionEnd
