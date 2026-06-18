@@ -54,14 +54,12 @@ jobs:
           curl -fsSL -o installers/windows/tuberemote.exe \
             "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/tuberemote-windows-amd64.exe"
 
-      - name: Install NSIS
-        run: choco install nsis -y
-        shell: cmd
-
-      - name: Build NSIS installer
-        shell: cmd
+      - name: Install NSIS and build installer
+        shell: pwsh
         run: |
-          cd installers\windows
+          choco install nsis -y
+          $env:PATH += ";C:\Program Files (x86)\NSIS"
+          Set-Location installers\windows
           makensis /DVERSION=${{ steps.ver.outputs.VERSION }} setup.nsi
 
       - name: Upload installer to release
