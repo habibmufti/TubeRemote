@@ -1,16 +1,12 @@
 package tray
 
 import (
-	_ "embed"
 	"fmt"
 	"os/exec"
 	"runtime"
 
 	"github.com/getlantern/systray"
 )
-
-//go:embed icon.png
-var icon []byte
 
 type Config struct {
 	Version string

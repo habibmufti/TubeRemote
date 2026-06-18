@@ -19,7 +19,8 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-  # Windows: systray is pure Win32, no CGO needed
+  # Windows: systray is pure Win32, no CGO needed.
+  # -H windowsgui hides the console window so it runs purely from the tray.
   - id: windows
     main: .
     binary: tuberemote
@@ -28,7 +29,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w -H windowsgui -X main.version={{.Version}}
 
 archives:
   - id: binaries

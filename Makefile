@@ -10,7 +10,7 @@ build: web
 	go build -ldflags "-X main.version=dev" -o $(BIN_DIR)/tuberemote .
 
 build-all: web
-	GOOS=windows GOARCH=amd64 go build -ldflags "-X main.version=dev" -o $(BIN_DIR)/tuberemote-windows.exe .
+	GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -X main.version=dev" -o $(BIN_DIR)/tuberemote-windows.exe .
 	GOOS=darwin  GOARCH=arm64 go build -ldflags "-X main.version=dev" -o $(BIN_DIR)/tuberemote-macos .
 	GOOS=linux   GOARCH=amd64 go build -ldflags "-X main.version=dev" -o $(BIN_DIR)/tuberemote-linux .
 
